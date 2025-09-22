@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Mac File Browser</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="top-bar">
+    <input type="text" id="path-input" placeholder="Enter path..." />
+</div>
+
+<div id="container">
+    <aside id="left-pane" class="sidebar">
+        <div class="sidebar-header">Favorites</div>
+        <ul id="favorites"></ul>
+    </aside>
+    <div id="right-pane">
+        <div id="file-browser-header">
+            <h3>File Browser</h3>
+            <select id="view-select">
+                <option value="small">Small Icons</option>
+                <option value="medium" selected>Medium Icons</option>
+                <option value="large">Large Icons</option>
+                <option value="details">Details View</option>
+            </select>
+        </div>
+        <div id="file-list" class="file-grid"></div>
+    </div>
+</div>
+
+<script src="renderer.js"></script>
+</body>
+</html>

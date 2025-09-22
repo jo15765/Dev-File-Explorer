@@ -1,0 +1,13 @@
+{
+  "name": "mac-file-browser",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "main.mjs",
+  "scripts": {
+    "start": "node node_modules/electron/cli.js ."
+  },
+  "dependencies": {
+    "electron": "^29.0.0",
+    "file-icon": "^6.0.0"
+  }
+}
