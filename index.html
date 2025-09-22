@@ -1,34 +1,151 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <title>Mac File Browser</title>
-    <link rel="stylesheet" href="style.css">
+    <meta charset="utf-8" />
+    <title>Demo File Browser</title>
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'">
+    <style>
+        html, body { height: 100%; margin: 0; }
+        body {
+            font: 14px/1.4 -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif;
+            color: #111; background: #fff;
+            display: flex; flex-direction: column;
+        }
+
+        .topbar { display: flex; gap: 8px; align-items: center; padding: 10px 12px; border-bottom: 1px solid #e5e5e5; background: #fff; }
+        #pathInput { flex: 1 1 auto; min-width: 260px; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; }
+        #viewSelect { padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; }
+        #goBtn { padding: 8px 12px; border: 1px solid #ccc; background: #f7f7f7; border-radius: 6px; cursor: pointer; }
+        #status { margin-left: 6px; font-size: 12px; color: #777; }
+
+        .app { flex: 1 1 auto; display: flex; min-height: 0; }
+
+        .sidebar {
+            width: 220px; min-width: 220px; border-right: 1px solid #e5e5e5; padding: 12px;
+            display: flex; flex-direction: column;
+            transition: background .15s ease, box-shadow .15s ease;
+            position: relative;
+        }
+        .sidebar.dragover { background: #f0f7ff; box-shadow: inset 0 0 0 2px #cfe3ff; }
+        .sidebar h2 { margin: 0 0 10px 4px; font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: .06em; }
+        .favorites { list-style: none; margin: 0; padding: 0; }
+        .fav { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 6px; cursor: pointer; user-select: none; }
+        .fav:hover { background: #f5f5f5; }
+        .fav.active { background: #e9f2ff; }
+        .fav .emoji { width: 20px; text-align: center; }
+
+        .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+        .header { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 12px 6px 12px; border-bottom: 1px solid #e5e5e5; font-size: 12px; color: #666; }
+        .header .title { font-weight: 600; color: #333; font-size: 13px; }
+        #where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .viewWrap { flex: 1 1 auto; overflow: auto; padding: 10px 12px 20px 12px; }
+        /* ICON GRID */
+        #iconsGrid { display: grid; gap: 16px; }
+        .icons-small  #iconsGrid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+        .icons-medium #iconsGrid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+        .icons-large  #iconsGrid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+        .tile { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px; border: 1px solid #f0f0f0; border-radius: 8px; cursor: pointer; user-select: none; }
+        .tile:hover { background: #f9f9f9; }
+        .tile .icon { border-radius: 6px; background: #eee; object-fit: cover; }
+        .icons-small  .tile .icon { width: 24px; height: 24px; }
+        .icons-medium .tile .icon { width: 48px; height: 48px; }
+        .icons-large  .tile .icon { width: 96px; height: 96px; }
+        .label { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; text-align: center; }
+        .tile.folder .label { font-weight: 600; }
+
+        /* DETAILS */
+        #detailsView { display: none; }
+        table.details { width: 100%; border-collapse: collapse; }
+        table.details th, table.details td { padding: 8px 10px; border-bottom: 1px solid #f0f0f0; text-align: left; }
+        table.details th { color: #555; font-weight: 600; font-size: 12px; }
+        table.details td { font-size: 13px; }
+        table.details tr:hover { background: #f9f9f9; }
+        .col-name { width: 48%; }
+        .col-type { width: 18%; color: #555; }
+        .col-size { width: 14%; color: #555; }
+        .col-mod  { width: 20%; color: #555; }
+
+        /* Context menu */
+        .ctx-menu { position: fixed; z-index: 9999; background: #fff; border: 1px solid #ddd; box-shadow: 0 8px 24px rgba(0,0,0,0.12); border-radius: 8px; padding: 6px; min-width: 220px; }
+        .ctx-item { padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+        .ctx-item:hover { background: #f5f5f5; }
+        .ctx-item.disabled { color: #aaa; cursor: default; }
+
+        /* First-run modal */
+        .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: none; align-items: center; justify-content: center; z-index: 10000; }
+        .overlay.show { display: flex; }
+        .modal { width: 480px; max-width: 90vw; background: #fff; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); padding: 18px; }
+        .modal h3 { margin: 0 0 10px; font-size: 18px; }
+        .sys-list { margin: 12px 0; display: grid; grid-template-columns: 1fr; gap: 8px; }
+        .sys-row { display: flex; align-items: center; gap: 8px; }
+        .sys-row input { width: 18px; height: 18px; }
+        .sys-row label { flex: 1; user-select: none; cursor: pointer; }
+        .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+        .btn { padding: 8px 12px; border: 1px solid #ccc; background: #f7f7f7; border-radius: 8px; cursor: pointer; }
+        .btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+        .hint { color: #777; font-size: 12px; margin-top: 6px; }
+    </style>
 </head>
-<body>
-<div id="top-bar">
-    <input type="text" id="path-input" placeholder="Enter path..." />
+<body class="icons-medium">
+<div class="topbar">
+    <input id="pathInput" type="text" placeholder="Enter a directory path…" />
+    <select id="viewSelect" title="View">
+        <option value="small">Small icons</option>
+        <option value="medium" selected>Medium icons</option>
+        <option value="large">Large icons</option>
+        <option value="details">Details</option>
+    </select>
+    <button id="goBtn">Go</button>
+    <div id="status"></div>
 </div>
 
-<div id="container">
-    <aside id="left-pane" class="sidebar">
-        <div class="sidebar-header">Favorites</div>
-        <ul id="favorites"></ul>
+<div class="app">
+    <aside class="sidebar" id="sidebar">
+        <h2>Favorites</h2>
+        <ul id="favorites" class="favorites"></ul>
+        <div style="margin-top:8px; color:#999; font-size:12px">Tip: drag a folder here</div>
     </aside>
-    <div id="right-pane">
-        <div id="file-browser-header">
-            <h3>File Browser</h3>
-            <select id="view-select">
-                <option value="small">Small Icons</option>
-                <option value="medium" selected>Medium Icons</option>
-                <option value="large">Large Icons</option>
-                <option value="details">Details View</option>
-            </select>
+
+    <section class="main">
+        <div class="header">
+            <div class="title">File Browser</div>
+            <div id="where"></div>
         </div>
-        <div id="file-list" class="file-grid"></div>
+
+        <div class="viewWrap">
+            <div id="iconsView"><div id="iconsGrid"></div></div>
+            <div id="detailsView">
+                <table class="details">
+                    <thead>
+                    <tr>
+                        <th class="col-name">Name</th>
+                        <th class="col-type">Type</th>
+                        <th class="col-size">Size</th>
+                        <th class="col-mod">Date Modified</th>
+                    </tr>
+                    </thead>
+                    <tbody id="detailsBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+</div>
+
+<!-- First-run modal -->
+<div class="overlay" id="setupOverlay" role="dialog" aria-modal="true">
+    <div class="modal">
+        <h3>Would you like to add common system folders to your Favorites?</h3>
+        <div class="sys-list" id="sysList"></div>
+        <div class="hint">You can add more later by dragging folders into Favorites.</div>
+        <div class="actions">
+            <button class="btn" id="setupNo">No</button>
+            <button class="btn primary" id="setupAdd">Add</button>
+        </div>
     </div>
 </div>
 
-<script src="renderer.js"></script>
+<script src="renderer.js" defer></script>
 </body>
 </html>
