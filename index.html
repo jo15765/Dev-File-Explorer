@@ -1,144 +1,289 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-    <meta charset="utf-8" />
-    <title>Demo File Browser</title>
-    <meta http-equiv="Content-Security-Policy"
-          content="default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'">
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'unsafe-inline' 'self'; script-src 'self';" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>File Browser</title>
     <style>
-        html, body { height: 100%; margin: 0; }
+        :root {
+            --bg: #0f1115;
+            --bg-elev: #151822;
+            --bg-elev-2: #1b2030;
+            --text: #e6e8ee;
+            --muted: #9aa3b2;
+            --accent: #3b82f6;
+            --border: #2a3040;
+            --hover: #1f2536;
+            --green: #22c55e;
+            --red: #ef4444;
+        }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
         body {
-            font: 14px/1.4 -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif;
-            color: #111; background: #fff;
-            display: flex; flex-direction: column;
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font: 14px/1.3 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
         }
 
-        .topbar { display: flex; gap: 8px; align-items: center; padding: 10px 12px; border-bottom: 1px solid #e5e5e5; background: #fff; }
-        #pathInput { flex: 1 1 auto; min-width: 260px; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; }
-        #viewSelect { padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; }
-        #goBtn { padding: 8px 12px; border: 1px solid #ccc; background: #f7f7f7; border-radius: 6px; cursor: pointer; }
-        #status { margin-left: 6px; font-size: 12px; color: #777; }
-
-        .app { flex: 1 1 auto; display: flex; min-height: 0; }
-
-        .sidebar {
-            width: 220px; min-width: 220px; border-right: 1px solid #e5e5e5; padding: 12px;
-            display: flex; flex-direction: column;
-            transition: background .15s ease, box-shadow .15s ease;
-            position: relative;
+        /* Top toolbar */
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px;
+            background: var(--bg-elev);
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 5;
         }
-        .sidebar.dragover { background: #f0f7ff; box-shadow: inset 0 0 0 2px #cfe3ff; }
-        .sidebar h2 { margin: 0 0 10px 4px; font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: .06em; }
-        .favorites { list-style: none; margin: 0; padding: 0; }
-        .fav { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 6px; cursor: pointer; user-select: none; }
-        .fav:hover { background: #f5f5f5; }
-        .fav.active { background: #e9f2ff; }
-        .fav .emoji { width: 20px; text-align: center; }
+        .toolbar input[type="text"] {
+            flex: 1;
+            background: var(--bg-elev-2);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 10px;
+            outline: none;
+        }
+        .toolbar button, .toolbar select {
+            background: var(--bg-elev-2);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 7px 10px;
+            cursor: pointer;
+        }
+        .toolbar button:hover, .toolbar select:hover { background: var(--hover); }
 
-        .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
-        .header { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 12px 6px 12px; border-bottom: 1px solid #e5e5e5; font-size: 12px; color: #666; }
-        .header .title { font-weight: 600; color: #333; font-size: 13px; }
-        #where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        /* In-window Options dropdown */
+        .options-wrap { position: relative; }
+        .options-menu {
+            position: absolute;
+            right: 0;
+            top: 38px;
+            width: 240px;
+            background: var(--bg-elev-2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 8px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+            display: none;
+            z-index: 20;
+        }
+        .options-wrap.open .options-menu { display: block; }
+        .options-menu .opt-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 6px;
+            border-radius: 8px;
+        }
+        .options-menu .opt-row:hover { background: var(--hover); }
+        .options-menu label { cursor: pointer; flex: 1; }
 
-        .viewWrap { flex: 1 1 auto; overflow: auto; padding: 10px 12px 20px 12px; }
-        /* ICON GRID */
-        #iconsGrid { display: grid; gap: 16px; }
-        .icons-small  #iconsGrid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
-        .icons-medium #iconsGrid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
-        .icons-large  #iconsGrid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
-        .tile { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px; border: 1px solid #f0f0f0; border-radius: 8px; cursor: pointer; user-select: none; }
-        .tile:hover { background: #f9f9f9; }
-        .tile .icon { border-radius: 6px; background: #eee; object-fit: cover; }
-        .icons-small  .tile .icon { width: 24px; height: 24px; }
-        .icons-medium .tile .icon { width: 48px; height: 48px; }
-        .icons-large  .tile .icon { width: 96px; height: 96px; }
-        .label { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; text-align: center; }
-        .tile.folder .label { font-weight: 600; }
+        /* Status line */
+        .status {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 6px 10px;
+            color: var(--muted);
+            font-size: 12px;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-elev);
+        }
 
-        /* DETAILS */
-        #detailsView { display: none; }
-        table.details { width: 100%; border-collapse: collapse; }
-        table.details th, table.details td { padding: 8px 10px; border-bottom: 1px solid #f0f0f0; text-align: left; }
-        table.details th { color: #555; font-weight: 600; font-size: 12px; }
-        table.details td { font-size: 13px; }
-        table.details tr:hover { background: #f9f9f9; }
-        .col-name { width: 48%; }
-        .col-type { width: 18%; color: #555; }
-        .col-size { width: 14%; color: #555; }
-        .col-mod  { width: 20%; color: #555; }
+        /* Layout */
+        .container {
+            display: grid;
+            grid-template-columns: 240px 1fr;
+            height: calc(100% - 92px); /* toolbar + status heights */
+            min-height: 480px;
+        }
+        aside#sidebar {
+            border-right: 1px solid var(--border);
+            background: var(--bg-elev);
+            overflow: auto;
+            padding: 10px;
+        }
+        aside h3 {
+            margin: 6px 0 10px 0;
+            font-size: 13px;
+            color: var(--muted);
+            letter-spacing: .03em;
+            text-transform: uppercase;
+        }
+        #favorites { list-style: none; padding: 0; margin: 0; }
+        #favorites li {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis;
+        }
+        #favorites li:hover { background: var(--hover); }
+        #favorites li.active { background: rgba(59,130,246,.18); border: 1px solid rgba(59,130,246,.35); }
+        #favorites .emoji { width: 20px; text-align: center; }
 
-        /* Context menu */
-        .ctx-menu { position: fixed; z-index: 9999; background: #fff; border: 1px solid #ddd; box-shadow: 0 8px 24px rgba(0,0,0,0.12); border-radius: 8px; padding: 6px; min-width: 220px; }
-        .ctx-item { padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-        .ctx-item:hover { background: #f5f5f5; }
-        .ctx-item.disabled { color: #aaa; cursor: default; }
+        #content { overflow: auto; background: var(--bg); }
+
+        /* Icons view */
+        #iconsView { display: block; padding: 12px; }
+        #iconsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 14px; }
+
+        /* Tiles (small/medium only) */
+        .tile {
+            background: var(--bg-elev-2);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 10px;
+            text-align: center;
+            cursor: default;
+            user-select: none;
+        }
+        .tile .icon { width: 48px; height: 48px; display: block; margin: 6px auto 8px auto; object-fit: contain; }
+        .tile .icon.fallback { font-size: 28px; line-height: 48px; }
+        body.icons-small .tile .icon { width: 32px; height: 32px; }
+        body.icons-small #iconsGrid { grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); }
+        .tile .label {
+            max-width: 100%;
+            display: block;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+
+        /* Details view */
+        #detailsView { display: none; padding: 8px 12px; }
+        table.file-table { width: 100%; border-collapse: collapse; }
+        .file-table thead th {
+            text-align: left;
+            padding: 8px 8px;
+            color: var(--muted);
+            font-weight: 600;
+            border-bottom: 1px solid var(--border);
+        }
+        .file-table tbody td {
+            padding: 8px 8px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: middle;
+        }
+        .file-table tbody tr:hover { background: var(--hover); }
+        .col-name { width: 50%; }
+
+        /* Right-click context menu */
+        .ctx-menu {
+            position: fixed; min-width: 220px;
+            background: var(--bg-elev-2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            box-shadow: 0 10px 35px rgba(0,0,0,.45);
+            z-index: 1000;
+            overflow: hidden;
+        }
+        .ctx-item, .ctx-sep { padding: 8px 10px; }
+        .ctx-item { cursor: pointer; }
+        .ctx-item:hover { background: var(--hover); }
+        .ctx-item.disabled { opacity: .5; cursor: default; }
+        .ctx-sep { height: 1px; background: var(--border); padding: 0; margin: 4px 0; }
+
+        /* DnD visual on sidebar */
+        #sidebar.dragover { outline: 2px dashed var(--accent); outline-offset: -6px; }
 
         /* First-run modal */
-        .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: none; align-items: center; justify-content: center; z-index: 10000; }
-        .overlay.show { display: flex; }
-        .modal { width: 480px; max-width: 90vw; background: #fff; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); padding: 18px; }
-        .modal h3 { margin: 0 0 10px; font-size: 18px; }
-        .sys-list { margin: 12px 0; display: grid; grid-template-columns: 1fr; gap: 8px; }
-        .sys-row { display: flex; align-items: center; gap: 8px; }
-        .sys-row input { width: 18px; height: 18px; }
-        .sys-row label { flex: 1; user-select: none; cursor: pointer; }
-        .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-        .btn { padding: 8px 12px; border: 1px solid #ccc; background: #f7f7f7; border-radius: 8px; cursor: pointer; }
-        .btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
-        .hint { color: #777; font-size: 12px; margin-top: 6px; }
+        #setupOverlay {
+            position: fixed; inset: 0; display: none;
+            align-items: center; justify-content: center;
+            background: rgba(0,0,0,.45); z-index: 2000;
+        }
+        #setupOverlay.show { display: flex; }
+        .modal {
+            width: 420px; max-width: calc(100% - 40px);
+            background: var(--bg-elev);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 16px;
+            box-shadow: 0 20px 50px rgba(0,0,0,.5);
+        }
+        .modal h2 { margin: 4px 0 10px 0; font-size: 18px; }
+        .sys-row { display: flex; align-items:center; gap: 10px; padding: 6px 4px; border-radius: 8px; }
+        .sys-row:hover { background: var(--hover); }
+        .modal .actions { display:flex; gap:8px; justify-content: flex-end; margin-top: 12px; }
+        .btn {
+            background: var(--bg-elev-2); color: var(--text);
+            border: 1px solid var(--border); border-radius: 10px;
+            padding: 8px 12px; cursor: pointer;
+        }
+        .btn.primary { background: var(--accent); border-color: transparent; }
+        .btn:hover { filter: brightness(1.05); }
     </style>
 </head>
 <body class="icons-medium">
-<div class="topbar">
-    <input id="pathInput" type="text" placeholder="Enter a directory path…" />
+<div class="toolbar">
+    <input id="pathInput" type="text" placeholder="Enter a path…"/>
+    <button id="goBtn" title="Go to path">Go</button>
+
     <select id="viewSelect" title="View">
-        <option value="small">Small icons</option>
-        <option value="medium" selected>Medium icons</option>
-        <option value="large">Large icons</option>
+        <option value="small">Small Icons</option>
+        <option value="medium" selected>Medium Icons</option>
         <option value="details">Details</option>
     </select>
-    <button id="goBtn">Go</button>
+
+    <div class="options-wrap" id="optionsWrap">
+        <button id="optionsBtn" title="Options">Options ▾</button>
+        <div class="options-menu" id="optionsMenu">
+            <div class="opt-row">
+                <input type="checkbox" id="optShowHidden" />
+                <label for="optShowHidden">Show Hidden Files</label>
+            </div>
+            <div class="opt-row">
+                <input type="checkbox" id="optShowExt" />
+                <label for="optShowExt">Show File Extensions</label>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="status">
+    <div>Current: <span id="where"></span></div>
     <div id="status"></div>
 </div>
 
-<div class="app">
-    <aside class="sidebar" id="sidebar">
-        <h2>Favorites</h2>
-        <ul id="favorites" class="favorites"></ul>
-        <div style="margin-top:8px; color:#999; font-size:12px">Tip: drag a folder here</div>
+<div class="container">
+    <aside id="sidebar">
+        <h3>Favorites</h3>
+        <ul id="favorites"></ul>
     </aside>
 
-    <section class="main">
-        <div class="header">
-            <div class="title">File Browser</div>
-            <div id="where"></div>
+    <section id="content">
+        <div id="iconsView">
+            <div id="iconsGrid"></div>
         </div>
-
-        <div class="viewWrap">
-            <div id="iconsView"><div id="iconsGrid"></div></div>
-            <div id="detailsView">
-                <table class="details">
-                    <thead>
-                    <tr>
-                        <th class="col-name">Name</th>
-                        <th class="col-type">Type</th>
-                        <th class="col-size">Size</th>
-                        <th class="col-mod">Date Modified</th>
-                    </tr>
-                    </thead>
-                    <tbody id="detailsBody"></tbody>
-                </table>
-            </div>
+        <div id="detailsView">
+            <table class="file-table">
+                <thead>
+                <tr>
+                    <th class="col-name">Name</th>
+                    <th class="col-type">Type</th>
+                    <th class="col-size">Size</th>
+                    <th class="col-mod">Modified</th>
+                </tr>
+                </thead>
+                <tbody id="detailsBody"></tbody>
+            </table>
         </div>
     </section>
 </div>
 
 <!-- First-run modal -->
-<div class="overlay" id="setupOverlay" role="dialog" aria-modal="true">
+<div id="setupOverlay">
     <div class="modal">
-        <h3>Would you like to add common system folders to your Favorites?</h3>
-        <div class="sys-list" id="sysList"></div>
-        <div class="hint">You can add more later by dragging folders into Favorites.</div>
+        <h2>Set up Favorites</h2>
+        <p>Would you like to add common system folders to Favorites?</p>
+        <div id="sysList" style="margin-top:8px;"></div>
         <div class="actions">
             <button class="btn" id="setupNo">No</button>
             <button class="btn primary" id="setupAdd">Add</button>
@@ -146,6 +291,6 @@
     </div>
 </div>
 
-<script src="renderer.js" defer></script>
+<script src="./renderer.js"></script>
 </body>
 </html>

@@ -1,38 +1,23 @@
-// preload.cjs — CommonJS preload
+'use strict';
 const { contextBridge, ipcRenderer } = require('electron');
 
-function computeHome() {
-    try { return require('node:os').homedir(); }
-    catch (e) { if (process.platform === 'win32') return process.env.USERPROFILE || ''; return process.env.HOME || ''; }
-}
-
 contextBridge.exposeInMainWorld('api', {
-    homedir: () => computeHome(),
-
-    // Files / listing
-    listDir: (dirPath, preferredIcon) => ipcRenderer.invoke('list-dir', dirPath, preferredIcon || 'medium'),
-
-    // Open with OS
-    openPath: (fullPath) => ipcRenderer.invoke('open-path', fullPath),
-
-    // Favorites persistence
-    loadFavorites:  () => ipcRenderer.invoke('favorites-load'),
-    addFavorite:    (folderPath, label, emoji) => ipcRenderer.invoke('favorites-add', folderPath, label, emoji),
-    removeFavorite: (folderPath) => ipcRenderer.invoke('favorites-remove', folderPath),
-
-    // Favorites context actions
-    renameFavorite: (folderPath, newBase) => ipcRenderer.invoke('favorites-rename', folderPath, newBase),
-    trashPath:      (folderPath) => ipcRenderer.invoke('trash-path', folderPath),
-
-    // Cut / Paste (move)
-    movePath: (srcPath, destDir) => ipcRenderer.invoke('move-path', srcPath, destDir),
-
-    // Unarchive
+    homedir: () => ipcRenderer.invoke('homedir'),
+    openPath: (p) => ipcRenderer.invoke('open-path', p),
+    listDir: (p, iconSize) => ipcRenderer.invoke('list-dir', p, iconSize),
+    movePath: (src, destDir) => ipcRenderer.invoke('move-path', src, destDir),
+    trashPath: (p) => ipcRenderer.invoke('trash-path', p),
+    renamePath: (oldPath, nextName) => ipcRenderer.invoke('rename-path', oldPath, nextName), // NEW
+    addFavorite: (p) => ipcRenderer.invoke('add-favorite', p),
+    removeFavorite: (p) => ipcRenderer.invoke('remove-favorite', p),
+    renameFavorite: (p, nextName) => ipcRenderer.invoke('rename-favorite', p, nextName),
+    getFavoritesState: () => ipcRenderer.invoke('get-favorites-state'),
+    getSystemFolders: () => ipcRenderer.invoke('get-system-folders'),
+    completeSetup: (keys) => ipcRenderer.invoke('complete-setup', keys),
+    skipSetup: () => ipcRenderer.invoke('skip-setup'),
     extractArchive: (archivePath, destDir) => ipcRenderer.invoke('extract-archive', archivePath, destDir),
-
-    // First-run setup
-    getSystemFolders: () => ipcRenderer.invoke('system-folders'),
-    getFavoritesState: () => ipcRenderer.invoke('favorites-state'),
-    completeSetup: (keys) => ipcRenderer.invoke('favorites-setup-complete', keys),
-    skipSetup: () => ipcRenderer.invoke('favorites-setup-skip'),
+    compress: (paths, destDir) => ipcRenderer.invoke('compress-paths', paths, destDir),
+    getPreferences: () => ipcRenderer.invoke('get-preferences'),
+    setPreferences: (patch) => ipcRenderer.invoke('set-preferences', patch),
+    onPrefsChanged: (cb) => ipcRenderer.on('prefs-changed', (_e, prefs) => { try { cb && cb(prefs); } catch {} })
 });

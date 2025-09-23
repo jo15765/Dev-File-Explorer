@@ -1,397 +1,258 @@
-// main.cjs (CommonJS) — main process
-const { app, BrowserWindow, ipcMain, nativeImage, shell } = require('electron');
-const path = require('node:path');
-const fs = require('node:fs');
-const fsp = require('node:fs/promises');
-const { spawn } = require('node:child_process');
+'use strict';
 
-/* ---------------- Window ---------------- */
+const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const fsp = fs.promises;
+const { execFile } = require('child_process');
+const util = require('util');
+const execFileP = util.promisify(execFile);
+let win;
 
 function createWindow() {
-    const win = new BrowserWindow({
-        width: 1100,
-        height: 750,
+    win = new BrowserWindow({
+        width: 1200,
+        height: 800,
         webPreferences: {
+            preload: path.join(__dirname, 'preload.cjs'),
             contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: false, // preload uses Node
-            preload: path.join(__dirname, 'preload.cjs')
+            sandbox: false,
+            nodeIntegration: false
         }
     });
-
     win.loadFile('index.html');
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     createWindow();
+    const s = await loadState();
+    buildMenu(s.prefs);
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
 });
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
-app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
-});
+function stateFile() { return path.join(app.getPath('userData'), 'favorites-state.json'); }
+const defaultPrefs = { showHidden: false, showExtensions: true };
 
-/* ---------------- Icons (robust) ---------------- */
-
-function prefToElectronSize(pref) {
-    return pref === 'small' ? 'small' : pref === 'large' ? 'large' : 'normal';
-}
-
-async function iconDataURLFor(p, preferred /* 'small'|'medium'|'large' */) {
-    if (!app.isReady()) await app.whenReady();
-
-    const first = prefToElectronSize(preferred || 'medium');
-    const candidates = [first, 'normal', 'small', 'large'].filter(function (v, i, a) { return a.indexOf(v) === i; });
-
-    for (let i = 0; i < candidates.length; i++) {
-        const size = candidates[i];
-        try {
-            const img = await app.getFileIcon(p, { size });
-            if (img && !img.isEmpty()) return img.toDataURL();
-        } catch (e) { /* try next */ }
-    }
-
-    // Fallback: thumbnail
-    const dim = preferred === 'large' ? 96 : preferred === 'small' ? 24 : 48;
+async function loadState() {
     try {
-        const thumb = await nativeImage.createThumbnailFromPath(p, { width: dim, height: dim });
-        if (thumb && !thumb.isEmpty()) return thumb.toDataURL();
-    } catch (e) {}
-
-    return '';
-}
-
-/* ---------------- Favorites store & system folders ---------------- */
-
-function storeFile() { return path.join(app.getPath('userData'), 'favorites.json'); }
-function defaultStore() { return { setupCompleted: false, items: [] }; } // items: [{path,label,emoji}]
-
-async function readStore() {
-    try {
-        const raw = await fsp.readFile(storeFile(), 'utf8');
-        const parsed = JSON.parse(raw);
+        const buf = await fsp.readFile(stateFile(), 'utf8');
+        const parsed = JSON.parse(buf);
         return {
             setupCompleted: !!parsed.setupCompleted,
-            items: Array.isArray(parsed.items) ? parsed.items : []
+            items: Array.isArray(parsed.items) ? parsed.items : [],
+            prefs: { ...defaultPrefs, ...(parsed.prefs || {}) }
         };
-    } catch (e) { return defaultStore(); }
-}
-
-async function writeStore(store) {
-    const payload = { setupCompleted: !!store.setupCompleted, items: Array.isArray(store.items) ? store.items : [] };
-    await fsp.mkdir(path.dirname(storeFile()), { recursive: true });
-    await fsp.writeFile(storeFile(), JSON.stringify(payload, null, 2), 'utf8');
-}
-
-function favObj(p, emoji, label) { return { path: p, label: label || (path.basename(p) || p), emoji: emoji || '📁' }; }
-
-function systemFolderDefs() {
-    return [
-        { key: 'desktop',   label: 'Desktop',   emoji: '🖥️', path: app.getPath('desktop')   },
-        { key: 'downloads', label: 'Downloads', emoji: '⬇️', path: app.getPath('downloads') },
-        { key: 'documents', label: 'Documents', emoji: '📄', path: app.getPath('documents') },
-        { key: 'music',     label: 'Music',     emoji: '🎵', path: app.getPath('music')     },
-        { key: 'pictures',  label: 'Pictures',  emoji: '🖼️', path: app.getPath('pictures')  },
-        { key: 'videos',    label: 'Videos',    emoji: '🎬', path: app.getPath('videos')    },
-    ];
-}
-
-async function systemFoldersWithExists() {
-    const defs = systemFolderDefs();
-    const out = [];
-    for (let i = 0; i < defs.length; i++) {
-        const d = defs[i];
-        let exists = false;
-        try { exists = (await fsp.stat(d.path)).isDirectory(); } catch (e) { exists = false; }
-        out.push({ ...d, exists });
+    } catch {
+        return { setupCompleted: false, items: [], prefs: { ...defaultPrefs } };
     }
-    return out;
 }
-
-async function systemPathSet() {
-    const defs = await systemFoldersWithExists();
-    const s = new Set();
-    for (let i = 0; i < defs.length; i++) if (defs[i].exists && defs[i].path) s.add(defs[i].path);
-    return s;
+async function saveState(s) {
+    await fsp.mkdir(path.dirname(stateFile()), { recursive: true });
+    await fsp.writeFile(stateFile(), JSON.stringify(s, null, 2), 'utf8');
 }
+function sysFolderEmoji(key) {
+    return ({ desktop:'🖥️', downloads:'⬇️', documents:'📄', music:'🎵', pictures:'🖼️', videos:'🎬' })[key] || '📁';
+}
+function isSamePath(a,b){ return path.resolve(a) === path.resolve(b); }
 
-function dedupeByPath(items) {
-    const seen = Object.create(null), out = [];
-    for (let i = 0; i < items.length; i++) {
-        const p = items[i].path;
-        if (!seen[p]) { seen[p] = 1; out.push(items[i]); }
+function buildMenu(prefs) {
+    const template = [];
+    if (process.platform === 'darwin') {
+        template.push({ label: app.name, submenu: [{ role:'about' }, { type:'separator' }, { role:'hide' }, { role:'hideOthers' }, { role:'unhide' }, { type:'separator' }, { role:'quit' }] });
     }
-    return out;
+    template.push({
+        label: 'Options',
+        submenu: [
+            { label:'Show Hidden Files', type:'checkbox', checked:!!prefs.showHidden, click: async (mi)=>{ await setPrefs({ showHidden: mi.checked }); } },
+            { label:'Show File Extensions', type:'checkbox', checked:!!prefs.showExtensions, click: async (mi)=>{ await setPrefs({ showExtensions: mi.checked }); } },
+        ]
+    });
+    template.push({ role:'viewMenu' }, { role:'editMenu' });
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+async function setPrefs(patch){
+    const s = await loadState();
+    s.prefs = { ...defaultPrefs, ...(s.prefs||{}), ...(patch||{}) };
+    await saveState(s);
+    buildMenu(s.prefs);
+    if (win && !win.isDestroyed()) win.webContents.send('prefs-changed', s.prefs);
 }
 
-/* ---------------- Favorites operations ---------------- */
-
-async function loadFavorites() {
-    const store = await readStore();
-    return store.items;
-}
-async function addFavoritePath(folderPath, label, emoji) {
-    let st;
-    try { st = await fsp.stat(folderPath); } catch (e) { throw new Error('Only folders can be added to Favorites.'); }
-    if (!st.isDirectory()) throw new Error('Only folders can be added to Favorites.');
-    const store = await readStore();
-    store.items = dedupeByPath(store.items.concat([favObj(folderPath, emoji, label)]));
-    await writeStore(store);
-    return store.items;
-}
-async function removeFavoritePath(folderPath) {
-    const store = await readStore();
-    store.items = store.items.filter(function (f) { return f.path !== folderPath; });
-    await writeStore(store);
-    return store.items;
-}
-
-function isValidBasename(name) {
-    if (!name) return false;
-    if (name === '.' || name === '..') return false;
-    if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) return false;
-    return true;
-}
-
-async function renameFavoriteFolderOnDisk(oldPath, newBase) {
-    const sysSet = await systemPathSet();
-    if (sysSet.has(oldPath)) throw new Error('Cannot rename system folder.');
-    let st;
-    try { st = await fsp.stat(oldPath); } catch (e) { throw new Error('Path is not a folder.'); }
-    if (!st.isDirectory()) throw new Error('Path is not a folder.');
-    if (!isValidBasename(newBase)) throw new Error('Invalid name.');
-
-    const parent = path.dirname(oldPath);
-    const newPath = path.join(parent, newBase);
-    if (fs.existsSync(newPath)) throw new Error('A file or folder with that name already exists.');
-
-    await fsp.rename(oldPath, newPath);
-
-    // Update store items
-    const store = await readStore();
-    for (let i = 0; i < store.items.length; i++) {
-        if (store.items[i].path === oldPath) { store.items[i].path = newPath; store.items[i].label = newBase; }
-    }
-    await writeStore(store);
-    return { items: store.items, newPath };
-}
-
-async function trashFavoriteFolderOnDisk(folderPath) {
-    const sysSet = await systemPathSet();
-    if (sysSet.has(folderPath)) throw new Error('Cannot delete system folder.');
-    let st;
-    try { st = await fsp.stat(folderPath); } catch (e) { throw new Error('Path is not a folder.'); }
-    if (!st.isDirectory()) throw new Error('Path is not a folder.');
-
-    await shell.trashItem(folderPath);
-
-    const store = await readStore();
-    store.items = store.items.filter(function (f) { return f.path !== folderPath; });
-    await writeStore(store);
-    return { items: store.items };
-}
-
-/* ---------------- Move (CUT/PASTE) ---------------- */
-
-async function pathExists(p) { try { await fsp.access(p); return true; } catch (e) { return false; } }
-
-async function copyPath(src, dest) {
-    const st = await fsp.stat(src);
+async function copyPath(src, dst) {
+    const st = await fsp.lstat(src);
     if (st.isDirectory()) {
-        await fsp.mkdir(dest, { recursive: true });
-        const entries = await fsp.readdir(src);
-        for (let i = 0; i < entries.length; i++) {
-            const name = entries[i];
-            await copyPath(path.join(src, name), path.join(dest, name));
+        await fsp.mkdir(dst, { recursive: true });
+        for (const name of await fsp.readdir(src)) {
+            await copyPath(path.join(src, name), path.join(dst, name));
         }
     } else {
-        await fsp.copyFile(src, dest);
+        await fsp.copyFile(src, dst);
     }
 }
-async function removePath(src) {
-    await fsp.rm(src, { recursive: true, force: true });
+async function removePath(p) { await fsp.rm(p, { recursive:true, force:true }); }
+async function runCmd(bin, args, cwd) { await util.promisify(execFile)(bin, args, { cwd }); }
+
+function iconSizeOption(s){ return s==='small'?'small':(s==='large'?'large':'normal'); }
+async function getIconDataURL(fullPath, iconSize){
+    try { const img = await app.getFileIcon(fullPath, { size: iconSizeOption(iconSize) }); return img && !img.isEmpty() ? img.toDataURL() : ''; }
+    catch { return ''; }
+}
+async function listDirectory(dirPath, iconSize){
+    const dirents = await fsp.readdir(dirPath, { withFileTypes:true });
+    const items = [];
+    for (const de of dirents) {
+        const name = de.name; const full = path.join(dirPath, name);
+        try {
+            const st = await fsp.lstat(full);
+            const isDir = st.isDirectory();
+            const iconDataUrl = await getIconDataURL(full, iconSize);
+            items.push({
+                name, path: full, isDir,
+                sizeBytes: isDir ? 0 : st.size,
+                mtimeMs: st.mtimeMs,
+                type: isDir ? 'Folder' : (path.extname(name).slice(1) || 'File'),
+                isHidden: name.startsWith('.'),
+                iconDataUrl
+            });
+        } catch {}
+    }
+    return items.sort((a,b)=> (a.isDir!==b.isDir) ? (a.isDir?-1:1) : a.name.localeCompare(b.name, undefined, { sensitivity:'base' }));
 }
 
-async function moveIntoDir(srcPath, destDir) {
-    const base = path.basename(srcPath);
-    const destPath = path.join(destDir, base);
-    if (await pathExists(destPath)) throw new Error('Destination already exists.');
+function uniqueZipName(destDir, baseName){
+    let name = baseName, i = 2;
+    while (fs.existsSync(path.join(destDir, name))) {
+        const base = baseName.endsWith('.zip') ? baseName.slice(0,-4) : baseName;
+        name = `${base} (${i}).zip`; i++;
+    }
+    return name;
+}
+async function compressPaths(paths, destDir){
+    if (!paths || !paths.length) throw new Error('No paths to compress.');
+    await fsp.access(destDir);
+    if (paths.length === 1) {
+        const base = path.basename(paths[0]) + '.zip';
+        const zipPath = path.join(destDir, uniqueZipName(destDir, base));
+        await runCmd('/usr/bin/ditto', ['-c','-k','--sequesterRsrc','--keepParent', paths[0], zipPath], destDir);
+        return zipPath;
+    }
+    const stage = path.join(destDir, '.zip-stage-' + Date.now());
+    await fsp.mkdir(stage, { recursive:true });
     try {
-        await fsp.rename(srcPath, destPath);
-    } catch (e) {
-        if (e && e.code === 'EXDEV') {
-            await copyPath(srcPath, destPath);
-            await removePath(srcPath);
-        } else {
-            throw e;
-        }
+        for (const p of paths) await copyPath(p, path.join(stage, path.basename(p)));
+        const zipPath = path.join(destDir, uniqueZipName(destDir, 'Archive.zip'));
+        await runCmd('/usr/bin/zip', ['-r', zipPath, '.'], stage);
+        return zipPath;
+    } finally { try { await removePath(stage); } catch {} }
+}
+async function extractArchive(archivePath, destDir){
+    const lower = archivePath.toLowerCase();
+    if (lower.endsWith('.zip')) { await runCmd('/usr/bin/ditto', ['-x','-k', archivePath, destDir], destDir); return; }
+    if (lower.endsWith('.7z') || lower.endsWith('.7zip')) {
+        const candidates = ['/opt/homebrew/bin/7z','/usr/local/bin/7z','/usr/bin/7z'];
+        let bin = null; for (const p of candidates) { try { await fsp.access(p); bin = p; break; } catch {} }
+        if (!bin) throw new Error('7z not found. Install with: brew install p7zip');
+        await runCmd(bin, ['x','-y','-o'+destDir, archivePath], destDir); return;
     }
-    return destPath;
+    throw new Error('Unsupported archive type');
 }
 
-/* ---------------- Unarchive (.zip / .7z) ---------------- */
-
-function find7z() {
-    const candidates = [
-        '/opt/homebrew/bin/7z',
-        '/opt/homebrew/bin/7za',
-        '/usr/local/bin/7z',
-        '/usr/local/bin/7za',
-        '/usr/bin/7z',
-        '/usr/bin/7za'
-    ];
-    for (let i = 0; i < candidates.length; i++) {
-        try { if (fs.existsSync(candidates[i])) return candidates[i]; } catch (e) {}
-    }
-    return null;
-}
-
-function runCmd(cmd, args, cwd) {
-    return new Promise((resolve, reject) => {
-        const child = spawn(cmd, args, { cwd });
-        let stderr = '';
-        child.stderr.on('data', (d) => { stderr += d.toString(); });
-        child.on('error', (err) => reject(err));
-        child.on('close', (code) => {
-            if (code === 0) resolve({ ok: true });
-            else reject(new Error(stderr || (cmd + ' exited with code ' + code)));
-        });
+function systemFolderInfo() {
+    const keys = ['desktop','downloads','documents','music','pictures','videos'];
+    return keys.map(key=>{
+        const p = app.getPath(key);
+        return { key, path:p, label:key[0].toUpperCase()+key.slice(1), emoji: sysFolderEmoji(key), exists: fs.existsSync(p) };
     });
 }
-
-async function extractArchive(archivePath, destDir) {
-    const ext = path.extname(archivePath).toLowerCase();
-    const baseName = path.basename(archivePath, ext);
-    const outDir = destDir; // extract into current dir
-
-    if (ext === '.zip') {
-        // Use macOS 'ditto' (fast, built-in)
-        await runCmd('/usr/bin/ditto', ['-x', '-k', archivePath, outDir], outDir);
-        return { ok: true };
-    }
-
-    if (ext === '.7z' || ext === '.7zip') {
-        const seven = find7z();
-        if (!seven) {
-            return { ok: false, error: '7z/7za not found. Install p7zip (e.g., `brew install p7zip`).' };
-        }
-        // 7z x <archive> -o<outDir> -y
-        await runCmd(seven, ['x', archivePath, '-y', '-o' + outDir], outDir);
-        return { ok: true };
-    }
-
-    return { ok: false, error: 'Unsupported archive type.' };
+function isSystemPath(p) {
+    const sys = systemFolderInfo().map(x => x.path);
+    const r = path.resolve(p);
+    return sys.some(sp => path.resolve(sp) === r);
 }
 
-/* ---------------- First-run setup ---------------- */
-
-async function getFavoritesState() { return await readStore(); }
-async function completeSetupWithKeys(keys) {
-    const defs = await systemFoldersWithExists();
-    const map = Object.create(null);
-    for (let i = 0; i < defs.length; i++) map[defs[i].key] = defs[i];
-
-    const store = await readStore();
-    const toAdd = [];
-    for (let i = 0; i < keys.length; i++) {
-        const def = map[keys[i]];
-        if (def && def.exists) toAdd.push(favObj(def.path, def.emoji, def.label));
-    }
-    store.items = dedupeByPath(store.items.concat(toAdd));
-    store.setupCompleted = true;
-    await writeStore(store);
-    return store;
-}
-async function skipSetup() {
-    const store = await readStore();
-    store.setupCompleted = true;
-    await writeStore(store);
-    return store;
-}
-
-/* ---------------- IPC ---------------- */
-
-// File open
-ipcMain.handle('open-path', async function (_e, fullPath) {
-    try { const res = await shell.openPath(fullPath); return res || ''; }
-    catch (err) { return (err && err.message) ? err.message : String(err); }
-});
-
-// Directory list
-ipcMain.handle('list-dir', async function (_e, dirPath, preferred) {
-    const entries = await fsp.readdir(dirPath, { withFileTypes: true });
-    const results = [];
-
-    for (let i = 0; i < entries.length; i++) {
-        const d = entries[i];
-        const p = path.join(dirPath, d.name);
-
-        let stats = null;
-        try { stats = await fsp.lstat(p); } catch (e) {}
-
-        let iconDataUrl = '';
-        try { iconDataUrl = await iconDataURLFor(p, preferred || 'medium'); } catch (e) {}
-
-        const isDir = d.isDirectory();
-        const ext = isDir ? '' : path.extname(d.name).slice(1);
-        const type = isDir ? 'Folder' : (ext ? (ext.toUpperCase() + ' file') : 'File');
-
-        results.push({
-            name: d.name,
-            path: p,
-            isDir: isDir,
-            iconDataUrl: iconDataUrl,
-            sizeBytes: stats && stats.isFile() ? stats.size : null,
-            mtimeMs: stats ? stats.mtimeMs : null,
-            type: type,
-            isHidden: d.name.charAt(0) === '.'
-        });
-    }
-
-    results.sort(function (a, b) {
-        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-        const an = a.name.toLowerCase(), bn = b.name.toLowerCase();
-        return an < bn ? -1 : (an > bn ? 1 : 0);
-    });
-
-    return results;
-});
-
-// Favorites CRUD
-ipcMain.handle('favorites-load', async function () { return await loadFavorites(); });
-ipcMain.handle('favorites-remove', async function (_e, folderPath) { return await removeFavoritePath(folderPath); });
-ipcMain.handle('favorites-add', async function (_e, folderPath, label, emoji) { return await addFavoritePath(folderPath, label, emoji); });
-
-// Rename/Delete on disk for favorites
-ipcMain.handle('favorites-rename', async function (_e, folderPath, newBase) {
-    try { const out = await renameFavoriteFolderOnDisk(folderPath, newBase); return { ok: true, items: out.items, newPath: out.newPath }; }
-    catch (err) { return { ok: false, error: (err && err.message) ? err.message : String(err) }; }
-});
-ipcMain.handle('trash-path', async function (_e, folderPath) {
-    try { const out = await trashFavoriteFolderOnDisk(folderPath); return { ok: true, items: out.items }; }
-    catch (err) { return { ok: false, error: (err && err.message) ? err.message : String(err) }; }
-});
-
-// Cut/Paste (move)
-ipcMain.handle('move-path', async function (_e, srcPath, destDir) {
+ipcMain.handle('homedir', async () => app.getPath('home'));
+ipcMain.handle('open-path', async (_e, p)=>{ try{ await shell.openPath(p); return {ok:true}; } catch(err){ return {ok:false, error:err.message||String(err)}; }});
+ipcMain.handle('list-dir', async (_e, dirPath, iconSize)=>{ try{ return await listDirectory(dirPath, iconSize||'medium'); } catch{ return []; }});
+ipcMain.handle('move-path', async (_e, srcPath, destDir) => {
     try {
-        const newPath = await moveIntoDir(srcPath, destDir);
-        return { ok: true, newPath };
+        await fsp.access(destDir);
+        const target = path.join(destDir, path.basename(srcPath));
+        try { await fsp.rename(srcPath, target); }
+        catch (err) { if (err && err.code === 'EXDEV') { await copyPath(srcPath, target); await removePath(srcPath); } else throw err; }
+        return { ok:true, newPath: target };
+    } catch (err) { return { ok:false, error: err.message || String(err) }; }
+});
+ipcMain.handle('trash-path', async (_e, p)=>{ try{ await shell.trashItem(p); return {ok:true}; } catch(err){ return {ok:false, error:err.message||String(err)}; }});
+ipcMain.handle('rename-path', async (_e, oldPath, nextName) => {
+    try {
+        if (isSystemPath(oldPath)) throw new Error('Cannot rename a system folder.');
+        if (!nextName || /[\/\\]/.test(nextName) || nextName === '.' || nextName === '..') throw new Error('Invalid name.');
+        const parent = path.dirname(oldPath);
+        const newPath = path.join(parent, nextName);
+        await fsp.rename(oldPath, newPath);
+        const s = await loadState();
+        let changed = false;
+        s.items = s.items.map(it => {
+            if (path.resolve(it.path) === path.resolve(oldPath)) {
+                changed = true;
+                return { ...it, path: newPath, label: nextName };
+            }
+            return it;
+        });
+        if (changed) await saveState(s);
+
+        return { ok: true, newPath, favorites: s.items };
     } catch (err) {
-        return { ok: false, error: (err && err.message) ? err.message : String(err) };
+        return { ok: false, error: err.message || String(err) };
     }
 });
 
-// Unarchive
-ipcMain.handle('extract-archive', async function (_e, archivePath, destDir) {
-    try { const res = await extractArchive(archivePath, destDir); return res; }
-    catch (err) { return { ok: false, error: (err && err.message) ? err.message : String(err) }; }
+ipcMain.handle('extract-archive', async (_e, archivePath, destDir)=>{ try{ await extractArchive(archivePath, destDir); return {ok:true}; } catch(err){ return {ok:false, error:err.message||String(err)}; }});
+ipcMain.handle('compress-paths', async (_e, paths, destDir)=>{ try{ const zipPath = await compressPaths(Array.isArray(paths)?paths:[], destDir); return {ok:true, zipPath}; } catch(err){ return {ok:false, error:err.message||String(err)}; }});
+ipcMain.handle('get-system-folders', async ()=> systemFolderInfo());
+ipcMain.handle('get-favorites-state', async ()=> loadState());
+ipcMain.handle('complete-setup', async (_e, keys)=>{
+    const s = await loadState();
+    if (Array.isArray(keys)) {
+        const sys = systemFolderInfo();
+        for (const key of keys) {
+            const info = sys.find(x => x.key === key && x.exists);
+            if (info && !s.items.some(it => isSamePath(it.path, info.path))) {
+                s.items.push({ path: info.path, label: info.label, emoji: info.emoji });
+            }
+        }
+    }
+    s.setupCompleted = true; await saveState(s); return s;
+});
+ipcMain.handle('skip-setup', async ()=>{ const s = await loadState(); s.setupCompleted = true; await saveState(s); return s; });
+ipcMain.handle('add-favorite', async (_e, p)=> {
+    try {
+        const st = await fsp.lstat(p);
+        if (!st.isDirectory()) throw new Error('Only folders can be favorited.');
+        const s = await loadState();
+        if (!s.items.some(it => isSamePath(it.path, p))) {
+            s.items.push({ path:p, label: path.basename(p), emoji:'📁' });
+            await saveState(s);
+        }
+        return s.items;
+    } catch (err) { return { ok:false, error: err.message || String(err) }; }
+});
+ipcMain.handle('remove-favorite', async (_e, p)=>{ const s = await loadState(); s.items = s.items.filter(it => !isSamePath(it.path, p)); await saveState(s); return s.items; });
+ipcMain.handle('rename-favorite', async (_e, oldPath, nextName)=>{
+    try{
+        if (isSystemPath(oldPath)) throw new Error('Cannot rename a system folder.');
+        const parent = path.dirname(oldPath);
+        const newPath = path.join(parent, nextName);
+        await fsp.rename(oldPath, newPath);
+        const s = await loadState();
+        s.items = s.items.map(it => isSamePath(it.path, oldPath) ? { ...it, path:newPath, label:nextName } : it);
+        await saveState(s);
+        return { ok:true, items:s.items, newPath };
+    }catch(err){ return { ok:false, error: err.message || String(err) }; }
 });
 
-// First-run setup
-ipcMain.handle('system-folders', async function () { return await systemFoldersWithExists(); });
-ipcMain.handle('favorites-state', async function () { return await getFavoritesState(); });
-ipcMain.handle('favorites-setup-complete', async function (_e, keys) { return await completeSetupWithKeys(Array.isArray(keys) ? keys : []); });
-ipcMain.handle('favorites-setup-skip', async function () { return await skipSetup(); });
+ipcMain.handle('get-preferences', async ()=> (await loadState()).prefs || { showHidden:false, showExtensions:true });
+ipcMain.handle('set-preferences', async (_e, patch)=>{ await setPrefs(patch||{}); return (await loadState()).prefs; });
